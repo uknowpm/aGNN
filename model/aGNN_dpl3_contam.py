@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import copy
 import math
 import numpy as np
-from lib.utils_dpl3 import norm_Adj
+from lib.utils_dpl3_contam import norm_Adj
 
 
 class RBF(nn.Module):
