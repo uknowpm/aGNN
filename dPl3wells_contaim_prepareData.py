@@ -4,6 +4,8 @@ import argparse
 import configparser
 
 
+
+
 def search_data(sequence_length, num_of_depend, label_start_idx,
                 num_for_predict, units, points_per_hour):
     '''
@@ -59,15 +61,15 @@ def search_data( num_of_depend, label_start_idx,
 
     return [(label_start_idx,label_start_idx+num_of_depend)]
 
-def get_sample_indices(data_sequence, num_of_weeks, num_of_days, num_of_hours,
+def get_sample_indices(data_sequence, num_of_lags,
                        label_start_idx, num_for_predict, points_per_hour=12):
     '''
     Parameters
     ----------
     data_sequence: np.ndarray
                    shape is (sequence_length, num_of_vertices, num_of_features)
-    num_of_weeks, num_of_days, num_of_hours: int
-    label_start_idx: int, the first index of predicting target, 预测值开始的那个点
+    num_of_hours: int
+    label_start_idx: int, the first index of predicting target,
     num_for_predict: int,
                      the number of points will be predicted for each sample
     points_per_hour: int, default 12, number of points per hour
@@ -85,34 +87,14 @@ def get_sample_indices(data_sequence, num_of_weeks, num_of_days, num_of_hours,
     target: np.ndarray
             shape is (num_for_predict, num_of_vertices, num_of_features)
     '''
-    week_sample, day_sample, hour_sample = None, None, None
+    lag_sample = None
 
 
     if label_start_idx + num_for_predict > data_sequence.shape[0]:
-        return week_sample, day_sample, hour_sample, None
+        return  lag_sample, None
 
-    if num_of_weeks > 0:
-        week_indices = search_data(data_sequence.shape[0], num_of_weeks,
-                                   label_start_idx, num_for_predict,
-                                   7 * 24, points_per_hour)
-        if not week_indices:
-            return None, None, None, None
-
-        week_sample = np.concatenate([data_sequence[i: j]
-                                      for i, j in week_indices], axis=0)
-
-    if num_of_days > 0:
-        day_indices = search_data(data_sequence.shape[0], num_of_days,
-                                  label_start_idx, num_for_predict,
-                                  1, points_per_hour)
-        if not day_indices:
-            return None, None, None, None
-
-        day_sample = np.concatenate([data_sequence[i: j]
-                                     for i, j in day_indices], axis=0)
-
-    if num_of_hours > 0:
-        num_of_depend = num_of_hours
+    if num_of_lags > 0:
+        num_of_depend = num_of_lags
         hour_indices = search_data( num_of_depend,
                                    label_start_idx)
         # hour_indices = search_data(data_sequence.shape[0], num_of_hours,
@@ -121,13 +103,13 @@ def get_sample_indices(data_sequence, num_of_weeks, num_of_days, num_of_hours,
         if not hour_indices:
             return None, None, None, None
 
-        hour_sample = np.concatenate([data_sequence[i: j]
+        lag_sample = np.concatenate([data_sequence[i: j]
                                       for i, j in hour_indices], axis=0)
 
     # target = data_sequence[label_start_idx: label_start_idx + num_for_predict]
     target = data_sequence[label_start_idx+num_of_depend: label_start_idx+num_of_depend + num_for_predict]
 
-    return week_sample, day_sample, hour_sample, target
+    return  lag_sample, target
 
 
 def MinMaxnormalization(train, val, test,flag):
@@ -186,9 +168,8 @@ def MinMaxnormalization(train, val, test,flag):
 
 
 def read_and_generate_dataset_encoder_decoder(graph_signal_matrix_filename,
-                                              num_of_weeks, num_of_days,
-                                              num_of_hours, num_for_predict,
-                                              points_per_hour=12, save=False):
+                                              num_of_lags, num_for_predict,
+                                              points_per_lags=12, save=False):
     '''
     Parameters
     ----------
@@ -208,28 +189,19 @@ def read_and_generate_dataset_encoder_decoder(graph_signal_matrix_filename,
     data_seq = np.load(graph_signal_matrix_filename)['data']  # (sequence_length, num_of_vertices, num_of_features)
 
     all_samples = []
-    for idx in range(data_seq.shape[0]-num_of_hours-num_for_predict):
+    for idx in range(data_seq.shape[0]-num_of_lags-num_for_predict):
         # if idx == 353 or idx ==350:
         #     print('d')
-        sample = get_sample_indices(data_seq, num_of_weeks, num_of_days,
-                                    num_of_hours, idx, num_for_predict,
-                                    points_per_hour)
+        sample = get_sample_indices(data_seq, num_of_lags, idx, num_for_predict,
+                                    points_per_lags)
         if ((sample[0] is None) and (sample[1] is None) and (sample[2] is None)):
             continue
 
-        week_sample, day_sample, hour_sample, target = sample
+        hour_sample, target = sample
 
         sample = []  # [(week_sample),(day_sample),(hour_sample),target,time_sample]
 
-        if num_of_weeks > 0:
-            week_sample = np.expand_dims(week_sample, axis=0).transpose((0, 2, 3, 1))  # (1,N,F,T)
-            sample.append(week_sample)
-
-        if num_of_days > 0:
-            day_sample = np.expand_dims(day_sample, axis=0).transpose((0, 2, 3, 1))  # (1,N,F,T)
-            sample.append(day_sample)
-
-        if num_of_hours > 0:
+        if num_of_lags > 0:
             hour_sample = np.expand_dims(hour_sample, axis=0).transpose((0, 2, 3, 1))  # (1,N,F,T)
             sample.append(hour_sample)
 
@@ -338,7 +310,7 @@ def read_and_generate_dataset_encoder_decoder(graph_signal_matrix_filename,
         file = os.path.basename(graph_signal_matrix_filename).split('.')[0]
         dirpath = os.path.dirname(graph_signal_matrix_filename)
         filename = os.path.join(dirpath,
-                                file + '_r' + str(num_of_hours) + '_d' + str(num_of_days) + '_w' + str(num_of_weeks))
+                                file + '_l' + str(num_of_lags) )
         print('save file:', filename)
         np.savez_compressed(filename,
                             train_x=all_data['train']['x'], train_target=all_data['train']['target'],
@@ -354,7 +326,7 @@ def read_and_generate_dataset_encoder_decoder(graph_signal_matrix_filename,
 
 
 # prepare dataset
-workingdir = "E:\ASTGNN-main\\"
+workingdir = "E:\\aGNN\\"
 parser = argparse.ArgumentParser()
 parser.add_argument("--config", default=workingdir+'configurations\dPl3wells_1contaim.conf', type=str,
                     help="configuration file path")
@@ -372,19 +344,14 @@ if config.has_option('Data', 'id_filename'):
 else:
     id_filename = None
 
-num_of_vertices = int(data_config['num_of_vertices'])
-points_per_hour = int(data_config['points_per_hour'])
-num_for_predict = int(data_config['num_for_predict'])
 len_input = int(data_config['len_input'])
 dataset_name = data_config['dataset_name']
-num_of_weeks = int(training_config['num_of_weeks'])
-num_of_days = int(training_config['num_of_days'])
-num_of_hours = int(training_config['num_of_hours'])
+num_of_lags = int(training_config['num_of_lags'])
 num_of_vertices = int(data_config['num_of_vertices'])
-points_per_hour = int(data_config['points_per_hour'])
+points_per_lags = int(data_config['points_per_lags'])
 num_for_predict = int(data_config['num_for_predict'])
 graph_signal_matrix_filename = data_config['graph_signal_matrix_filename']
 data = np.load(graph_signal_matrix_filename)
 # data['data'].shape
 
-all_data = read_and_generate_dataset_encoder_decoder(graph_signal_matrix_filename, num_of_weeks, num_of_days, num_of_hours, num_for_predict, points_per_hour=points_per_hour, save=True)
+all_data = read_and_generate_dataset_encoder_decoder(graph_signal_matrix_filename,  num_of_lags, num_for_predict, points_per_lags=points_per_lags, save=True)

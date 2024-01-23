@@ -29,25 +29,29 @@ class RBF(nn.Module):
             distances.
     """
 
-    def __init__(self, in_features, out_features, basis_func):
+    def __init__(self, in_features, out_features, num_vertice,basis_func):
         super(RBF, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.centres = nn.Parameter(torch.Tensor(out_features, in_features))
+        self.centres1 = nn.Parameter(torch.Tensor(num_vertice, self.in_features))  # (out_features, in_features)
+        self.alpha = nn.Parameter(torch.Tensor(num_vertice,out_features))
         self.log_sigmas = nn.Parameter(torch.Tensor(out_features))
         self.basis_func = basis_func
         self.reset_parameters()
 
+
+        # self.alpha1 = nn.Parameter(torch.Tensor(num_vertice, self.out_features))
     def reset_parameters(self):
-        nn.init.normal_(self.centres, 0, 1)
+        nn.init.normal_(self.centres1, 0, 1)
         nn.init.constant_(self.log_sigmas, 0)
 
     def forward(self, input):
-        size = (input.size(0), self.out_features, self.in_features)
-        x = input.unsqueeze(1).expand(size)
-        c = self.centres.unsqueeze(0).expand(size)
-        distances = (x - c).pow(2).sum(-1).pow(0.5) / torch.exp(self.log_sigmas).unsqueeze(0)
-        return self.basis_func(distances)
+
+        size1= (input.size(0), input.size(0), self.in_features)
+        x1 = input.unsqueeze(1).expand(size1)
+        c1 = self.centres1.unsqueeze(0).expand(size1)
+        distances1 = torch.matmul((x1 - c1).pow(2).sum(-1).pow(0.5),self.alpha) / torch.exp(self.log_sigmas).unsqueeze(0)
+        return self.basis_func(distances1) #distances1
 
 
 # RBFs
@@ -267,96 +271,40 @@ class spatialAttentionScaledGCN(nn.Module):
         # (b*t, n, f_in)->(b*t, n, f_out)->(b,t,n,f_out)->(b,n,t,f_out)
 
 
-class SpatialPositionalEncoding(nn.Module):
-    def __init__(self, d_model, num_of_vertices, dropout, gcn=None, smooth_layer_num=0):
-        super(SpatialPositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        self.embedding = torch.nn.Embedding(num_of_vertices, d_model)
-        self.gcn_smooth_layers = None
-        if (gcn is not None) and (smooth_layer_num > 0):
-            self.gcn_smooth_layers = nn.ModuleList([gcn for _ in range(smooth_layer_num)])
-
-    def forward(self, x):
-        '''
-        :param x: (batch_size, N, T, F_in)
-        :return: (batch_size, N, T, F_out)
-        '''
-        batch, num_of_vertices, timestamps, _ = x.shape
-        x_indexs = torch.LongTensor(torch.arange(num_of_vertices)).to(x.device)  # (N,)
-        embed = self.embedding(x_indexs).unsqueeze(0)  # (N, d_model)->(1,N,d_model)
-        if self.gcn_smooth_layers is not None:
-            for _, l in enumerate(self.gcn_smooth_layers):
-                embed = l(embed)  # (1,N,d_model) -> (1,N,d_model)
-        x = x + embed.unsqueeze(2)  # (B, N, T, d_model)+(1, N, 1, d_model)
-        return self.dropout(x)
-
-class SpatialPositionalEncoding_all(nn.Module):
-    def __init__(self, d_model, logitudelatitudes,num_of_vertices, dropout, gcn=None, smooth_layer_num=0):
-        super(SpatialPositionalEncoding_all, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        # self.embedding = torch.nn.Embedding(num_of_vertices, d_model)
-        self.embedding = nn.Linear(4, d_model-4)
-        self.logitudelatitudes = logitudelatitudes
-        self.gcn_smooth_layers = None
-        if (gcn is not None) and (smooth_layer_num > 0):
-            self.gcn_smooth_layers = nn.ModuleList([gcn for _ in range(smooth_layer_num)])
-
-    def forward(self, x):
-        '''
-        :param x: (batch_size, N, T, F_in)
-        :return: (batch_size, N, T, F_out)
-        '''
-        batch, num_of_vertices, timestamps, _ = x.shape
-        x_indexs = torch.LongTensor(torch.arange(num_of_vertices)).to(x.device)  # (N,)
-        # embed = self.embedding(x_indexs).unsqueeze(0)  # (N, d_model)->(1,N,d_model)
-        x_indexs_o = torch.FloatTensor(self.logitudelatitudes).to(x.device)
-
-        x_ind =  torch.concat((torch.cos(x_indexs_o[:,0:1]),torch.sin(x_indexs_o[:,0:1]),
-                               torch.cos(x_indexs_o[:, 1:] ),torch.sin(x_indexs_o[:,1:])),axis=1)#/denominator
-        embed = torch.concat((self.embedding(x_ind.float()),x_ind.float()),axis=1).unsqueeze(0)  # (N, 2)->(1,N,d_model)
-        if self.gcn_smooth_layers is not None:
-            for _, l in enumerate(self.gcn_smooth_layers):
-                embed = l(embed)  # (1,N,d_model) -> (1,N,d_model)
-        x = x + embed.unsqueeze(2)  # (B, N, T, d_model)+(1, N, 1, d_model)
-        return self.dropout(x)
 
 class SpatialPositionalEncoding_RBF(nn.Module):
     def __init__(self, d_model, logitudelatitudes,num_of_vertices, dropout, gcn=None, smooth_layer_num=0):
         super(SpatialPositionalEncoding_RBF, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
         # self.embedding = torch.nn.Embedding(num_of_vertices, d_model)
-        self.embedding = RBF(6, d_model, quadratic) # gaussin nn.Linear(4, d_model-4)
+        self.embedding = RBF(2, d_model, num_of_vertices,quadratic) # gaussin nn.Linear(4, d_model-4)
         self.logitudelatitudes = logitudelatitudes
         self.gcn_smooth_layers = None
         if (gcn is not None) and (smooth_layer_num > 0):
             self.gcn_smooth_layers = nn.ModuleList([gcn for _ in range(smooth_layer_num)])
 
-    def forward(self, x):
+    def forward(self, x,log1,lat1):
         '''
         :param x: (batch_size, N, T, F_in)
         :return: (batch_size, N, T, F_out)
         '''
+        # x,log,lat,t= x[0],x[1],x[2],x[3]
         batch, num_of_vertices, timestamps, _ = x.shape
-        x_indexs = torch.LongTensor(torch.arange(num_of_vertices)).to(x.device)  # (N,)
-        # embed = self.embedding(x_indexs).unsqueeze(0)  # (N, d_model)->(1,N,d_model)
-        x_indexs_o = torch.FloatTensor(self.logitudelatitudes).to(x.device)
-        # x_ind =  torch.concat((torch.cos(x_indexs_o[:,0:1]),torch.sin(x_indexs_o[:,0:1]),
-        #                        torch.cos(x_indexs_o[:, 1:] ),torch.sin(x_indexs_o[:,1:])),axis=1)#/denominator
-        # x_ind = torch.concat((torch.cos(x_indexs_o[:, 0:1]/15), torch.sin(x_indexs_o[:, 0:1]/15),
-        #                       torch.cos(x_indexs_o[:, 1:]/30), torch.sin(x_indexs_o[:, 1:]/30)), axis=1)  # /denominator
-        x_ind = torch.concat((torch.cos(x_indexs_o[:, 0:1]/15), torch.sin(x_indexs_o[:, 0:1]/15),
-                              torch.cos(x_indexs_o[:, 1:]/30), torch.sin(x_indexs_o[:, 1:]/30),
-                              x_indexs_o[:, 0:1] / 15,
-                              x_indexs_o[:, 1:] / 30)
+        x_indexs = torch.concat((torch.unsqueeze(log1.mean(0).mean(-1),-1),torch.unsqueeze(lat1.mean(0).mean(-1),-1)),-1)# (N,)
+
+        x_ind = torch.concat((
+                              x_indexs[:, 0:1] ,
+                              x_indexs[:, 1:] )
                              , axis=1)
-                              #                       torch.concat((, axis=1)
-        # embed = torch.concat((self.embedding(x_ind.float()),x_ind.float()),axis=1).unsqueeze(0)  # (N, 2)->(1,N,d_model)
+
         embed = self.embedding(x_ind.float()).unsqueeze(0)
         if self.gcn_smooth_layers is not None:
             for _, l in enumerate(self.gcn_smooth_layers):
                 embed = l(embed)  # (1,N,d_model) -> (1,N,d_model)
         x = x + embed.unsqueeze(2)  # (B, N, T, d_model)+(1, N, 1, d_model)
+
         return self.dropout(x)
+
 
 class TemporalPositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout, max_len, lookup_index=None):
@@ -378,7 +326,7 @@ class TemporalPositionalEncoding(nn.Module):
         # Adds a persistent buffer to the module.
         # This is typically used to register a buffer that should not to be considered a model parameter.
 
-    def forward(self, x):
+    def forward(self, x,t):
         '''
         :param x: (batch_size, N, T, F_in)
         :return: (batch_size, N, T, F_out)
@@ -492,7 +440,7 @@ class MultiHeadAttention(nn.Module):
 
 
 class MultiHeadAttentionAwareTemporalContex_qc_kc(nn.Module):  # key causal; query causal;
-    def __init__(self, nb_head, d_model, num_of_weeks, num_of_days, num_of_hours, points_per_hour, kernel_size=3, dropout=.0):
+    def __init__(self, nb_head, d_model, num_of_lags, points_per_lag, kernel_size=3, dropout=.0):
         '''
         :param nb_head:
         :param d_model:
@@ -511,9 +459,7 @@ class MultiHeadAttentionAwareTemporalContex_qc_kc(nn.Module):  # key causal; que
         self.padding = kernel_size - 1
         self.conv1Ds_aware_temporal_context = clones(nn.Conv2d(d_model, d_model, (1, kernel_size), padding=(0, self.padding)), 2)  # # 2 causal conv: 1  for query, 1 for key
         self.dropout = nn.Dropout(p=dropout)
-        self.w_length = num_of_weeks * points_per_hour
-        self.d_length = num_of_days * points_per_hour
-        self.h_length = num_of_hours * points_per_hour
+        self.n_length = num_of_lags * points_per_lag
 
 
     def forward(self, query, key, value, mask=None, query_multi_segment=False, key_multi_segment=False):
@@ -541,17 +487,7 @@ class MultiHeadAttentionAwareTemporalContex_qc_kc(nn.Module):  # key causal; que
         if query_multi_segment and key_multi_segment:
             query_list = []
             key_list = []
-            if self.w_length > 0:
-                query_w, key_w = [l(x.permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :, :self.w_length, :], key[:, :, :self.w_length, :]))]
-                query_list.append(query_w)
-                key_list.append(key_w)
-
-            if self.d_length > 0:
-                query_d, key_d = [l(x.permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :, self.w_length:self.w_length+self.d_length, :], key[:, :, self.w_length:self.w_length+self.d_length, :]))]
-                query_list.append(query_d)
-                key_list.append(key_d)
-
-            if self.h_length > 0:
+            if self.n_length > 0:
                 query_h, key_h = [l(x.permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :], key[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :]))]
                 query_list.append(query_h)
                 key_list.append(key_h)
@@ -569,16 +505,8 @@ class MultiHeadAttentionAwareTemporalContex_qc_kc(nn.Module):  # key causal; que
 
             key_list = []
 
-            if self.w_length > 0:
-                key_w = self.conv1Ds_aware_temporal_context[1](key[:, :, :self.w_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_list.append(key_w)
-
-            if self.d_length > 0:
-                key_d = self.conv1Ds_aware_temporal_context[1](key[:, :, self.w_length:self.w_length + self.d_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_list.append(key_d)
-
-            if self.h_length > 0:
-                key_h = self.conv1Ds_aware_temporal_context[1](key[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
+            if self.n_length > 0:
+                key_h = self.conv1Ds_aware_temporal_context[1](key[:, :,0:self.n_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
                 key_list.append(key_h)
 
             key = torch.cat(key_list, dim=3)
@@ -603,7 +531,7 @@ class MultiHeadAttentionAwareTemporalContex_qc_kc(nn.Module):  # key causal; que
 
 
 class MultiHeadAttentionAwareTemporalContex_q1d_k1d(nn.Module):  # 1d conv on query, 1d conv on key
-    def __init__(self, nb_head, d_model, num_of_weeks, num_of_days, num_of_hours, points_per_hour, kernel_size=3, dropout=.0):
+    def __init__(self, nb_head, d_model, num_of_lags, points_per_lag,  kernel_size=3, dropout=.0): #num_of_weeks, num_of_days, num_of_hours
 
         super(MultiHeadAttentionAwareTemporalContex_q1d_k1d, self).__init__()
         assert d_model % nb_head == 0
@@ -617,9 +545,7 @@ class MultiHeadAttentionAwareTemporalContex_q1d_k1d(nn.Module):  # 1d conv on qu
             2)  # # 2 causal conv: 1  for query, 1 for key
 
         self.dropout = nn.Dropout(p=dropout)
-        self.w_length = num_of_weeks * points_per_hour
-        self.d_length = num_of_days * points_per_hour
-        self.h_length = num_of_hours * points_per_hour
+        self.n_length = num_of_lags * points_per_lag  #num_of_hours * points_per_hour
 
 
     def forward(self, query, key, value, mask=None, query_multi_segment=False, key_multi_segment=False):
@@ -647,18 +573,8 @@ class MultiHeadAttentionAwareTemporalContex_q1d_k1d(nn.Module):  # 1d conv on qu
         if query_multi_segment and key_multi_segment:
             query_list = []
             key_list = []
-            if self.w_length > 0:
-                query_w, key_w = [l(x.permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :, :self.w_length, :], key[:, :, :self.w_length, :]))]
-                query_list.append(query_w)
-                key_list.append(key_w)
-
-            if self.d_length > 0:
-                query_d, key_d = [l(x.permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :, self.w_length:self.w_length+self.d_length, :], key[:, :, self.w_length:self.w_length+self.d_length, :]))]
-                query_list.append(query_d)
-                key_list.append(key_d)
-
-            if self.h_length > 0:
-                query_h, key_h = [l(x.permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :], key[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :]))]
+            if self.n_length > 0:
+                query_h, key_h = [l(x.permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2) for l, x in zip(self.conv1Ds_aware_temporal_context, (query[:, :,0: self.n_length, :], key[:, :, 0: self.n_length, :]))]
                 query_list.append(query_h)
                 key_list.append(key_h)
 
@@ -675,16 +591,8 @@ class MultiHeadAttentionAwareTemporalContex_q1d_k1d(nn.Module):  # 1d conv on qu
 
             key_list = []
 
-            if self.w_length > 0:
-                key_w = self.conv1Ds_aware_temporal_context[1](key[:, :, :self.w_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_list.append(key_w)
-
-            if self.d_length > 0:
-                key_d = self.conv1Ds_aware_temporal_context[1](key[:, :, self.w_length:self.w_length + self.d_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_list.append(key_d)
-
-            if self.h_length > 0:
-                key_h = self.conv1Ds_aware_temporal_context[1](key[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
+            if self.n_length > 0:
+                key_h = self.conv1Ds_aware_temporal_context[1](key[:, :, 0:self.n_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
                 key_list.append(key_h)
 
             key = torch.cat(key_list, dim=3)
@@ -709,7 +617,7 @@ class MultiHeadAttentionAwareTemporalContex_q1d_k1d(nn.Module):  # 1d conv on qu
 
 
 class MultiHeadAttentionAwareTemporalContex_qc_k1d(nn.Module):  # query: causal conv; key 1d conv
-    def __init__(self, nb_head, d_model, num_of_weeks, num_of_days, num_of_hours, points_per_hour, kernel_size=3, dropout=.0):
+    def __init__(self, nb_head, d_model, num_of_lags, points_per_lag,  kernel_size=3, dropout=.0):
         super(MultiHeadAttentionAwareTemporalContex_qc_k1d, self).__init__()
         assert d_model % nb_head == 0
         self.d_k = d_model // nb_head
@@ -720,9 +628,7 @@ class MultiHeadAttentionAwareTemporalContex_qc_k1d(nn.Module):  # query: causal 
         self.query_conv1Ds_aware_temporal_context = nn.Conv2d(d_model, d_model, (1, kernel_size), padding=(0, self.causal_padding))
         self.key_conv1Ds_aware_temporal_context = nn.Conv2d(d_model, d_model, (1, kernel_size), padding=(0, self.padding_1D))
         self.dropout = nn.Dropout(p=dropout)
-        self.w_length = num_of_weeks * points_per_hour
-        self.d_length = num_of_days * points_per_hour
-        self.h_length = num_of_hours * points_per_hour
+        self.n_length = num_of_lags * points_per_lag
 
 
     def forward(self, query, key, value, mask=None, query_multi_segment=False, key_multi_segment=False):
@@ -750,22 +656,10 @@ class MultiHeadAttentionAwareTemporalContex_qc_k1d(nn.Module):  # query: causal 
         if query_multi_segment and key_multi_segment:
             query_list = []
             key_list = []
-            if self.w_length > 0:
-                query_w = self.query_conv1Ds_aware_temporal_context(query[:, :, :self.w_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.causal_padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_w = self.key_conv1Ds_aware_temporal_context(key[:, :, :self.w_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                query_list.append(query_w)
-                key_list.append(key_w)
-
-            if self.d_length > 0:
-                query_d = self.query_conv1Ds_aware_temporal_context(query[:, :, self.w_length:self.w_length+self.d_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.causal_padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_d = self.key_conv1Ds_aware_temporal_context(key[:, :, self.w_length:self.w_length+self.d_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                query_list.append(query_d)
-                key_list.append(key_d)
-
-            if self.h_length > 0:
-                query_h = self.query_conv1Ds_aware_temporal_context(query[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.causal_padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1,
+            if self.n_length > 0:
+                query_h = self.query_conv1Ds_aware_temporal_context(query[:, :, 0: self.n_length, :].permute(0, 3, 1, 2))[:, :, :, :-self.causal_padding].contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1,
                                                                                                                 4, 2)
-                key_h = self.key_conv1Ds_aware_temporal_context(key[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
+                key_h = self.key_conv1Ds_aware_temporal_context(key[:, :,0: self.n_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
 
                 query_list.append(query_h)
                 key_list.append(key_h)
@@ -784,16 +678,8 @@ class MultiHeadAttentionAwareTemporalContex_qc_k1d(nn.Module):  # query: causal 
 
             key_list = []
 
-            if self.w_length > 0:
-                key_w = self.key_conv1Ds_aware_temporal_context(key[:, :, :self.w_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_list.append(key_w)
-
-            if self.d_length > 0:
-                key_d = self.key_conv1Ds_aware_temporal_context(key[:, :, self.w_length:self.w_length + self.d_length, :].permute(0, 3, 1, 2)).contiguous().view(nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
-                key_list.append(key_d)
-
-            if self.h_length > 0:
-                key_h = self.key_conv1Ds_aware_temporal_context(key[:, :, self.w_length + self.d_length:self.w_length + self.d_length + self.h_length, :].permute(0, 3, 1, 2)).contiguous().view(
+            if self.n_length > 0:
+                key_h = self.key_conv1Ds_aware_temporal_context(key[:, :, 0: self.n_length, :].permute(0, 3, 1, 2)).contiguous().view(
                     nbatches, self.h, self.d_k, N, -1).permute(0, 3, 1, 4, 2)
                 key_list.append(key_h)
 
@@ -819,66 +705,66 @@ class MultiHeadAttentionAwareTemporalContex_qc_k1d(nn.Module):  # query: causal 
 
 
 class EncoderDecoder(nn.Module):
-    def __init__(self, encoder, decoder1, src_dense, trg_dense, generator1, DEVICE,spatial_position): #generator2,
+    def __init__(self, encoder, trg_dim,decoder1, src_dense, encode_temporal_position,decode_temporal_position, generator1, DEVICE,spatial_position): #generator2,
         super(EncoderDecoder, self).__init__()
         self.encoder = encoder
         self.decoder1 = decoder1
         # self.decoder2 = decoder2
         self.src_embed = src_dense
-        self.trg_embed = trg_dense
+        # self.trg_embed = trg_dense
+        self.encode_temporal_position = encode_temporal_position
+        self.decode_temporal_position = decode_temporal_position
         self.prediction_generator1 = generator1
         # self.prediction_generator2 = generator2
         self.spatial_position = spatial_position
+        self.trg_dim = trg_dim
         self.to(DEVICE)
 
-    def forward(self, src, trg):
+    def forward(self, src, trg,x,y,te,td):
         '''
         src:  (batch_size, N, T_in, F_in)
         trg: (batch, N, T_out, F_out)
         '''
-        encoder_output = self.encode(src)  # (batch_size, N, T_in, d_model)
+        encoder_output = self.encode(src,x,y,te)  # (batch_size, N, T_in, d_model)
 
-        # return self.decode(trg[:,:,:,-2:], encoder_output, trg[:,:,:,:2])#src[:,:,-1:,:2])#
-        trg_shape = int(trg.shape[-1]/2)
-        return self.decode1(trg[:, :, :, -trg_shape:], encoder_output, trg[:, :, :, :trg_shape])  # src[:,:,-1:,:2])#
+        trg_shape = self.trg_dim#int(trg.shape[-1]/2)
+        return self.decode1(trg[:, :, :, -trg_shape:], encoder_output, trg[:, :, :, :trg_shape],x,y,td)#trg[:, :, :, :trg_shape],x,y,td)  # src[:,:,-1:,:2])#
 
-    def encode(self, src):
+    def encode(self, src,x,y,t):
         '''
         src: (batch_size, N, T_in, F_in)
         '''
-        h = self.src_embed(src)
+        src_emb = self.src_embed(src)
+        if self.encode_temporal_position ==False:
+            src_tmpo_emb = src_emb
+        else:
+            src_tmpo_emb = self.encode_temporal_position(src_emb,t)
+        if self.spatial_position == False:
+            h = src_tmpo_emb
+        else:
+            h = self.spatial_position(src_tmpo_emb, x,y)
+
         return self.encoder(h)
-        # return self.encoder(self.src_embed(src))
 
-    def decode(self, trg, encoder_output,encoder_input):
-        trg_embed1 = self.trg_embed
-        trg_embed_r = torch.matmul( trg,list(trg_embed1.parameters())[0][:,2:].T)
-        if self.spatial_position ==False:
-            return self.prediction_generator1(self.decoder1(trg_embed_r, encoder_output))+encoder_input
-        else:
-            return self.prediction_generator1(self.decoder1(self.spatial_position(trg_embed_r), encoder_output))+encoder_input#self.prediction_generator(self.decoder(self.trg_embed(trg), encoder_output))+encoder_input#[:,:,:,:]
 
-    def decode1(self, trg, encoder_output,encoder_input):
-        trg_embed1 = self.trg_embed
+    def decode1(self, trg, encoder_output,encoder_input,x,y,t):
         trg_embed = self.src_embed
-        # self.trg_embed
-        # trg_embed_r2 = torch.matmul( trg[:,:,:,0:3:2], list(trg_embed1.parameters())[0][:, 2:4].T)
-        if self.spatial_position ==False:
-            # bias = list(trg_embed1.parameters())[1].unsqueeze(1)
-            trg_emb_shape = int(list(trg_embed.parameters())[0].shape[-1]/2)
-            trg_embed_r1 = torch.matmul(trg, list(trg_embed.parameters())[0][:, trg_emb_shape:].T)  # trg[:,:,:,:2]
-            a =  self.prediction_generator1(self.decoder1(trg_embed_r1, encoder_output))+encoder_input#[:,:,:,0:2]
-            # b = self.prediction_generator2(self.decoder1(trg_embed_r2, encoder_output))+encoder_input[:,:,:,0:3:2]
-            return a#torch.cat((a,b),axis=-1)
+        trg_emb_shape = self.trg_dim
+        trg_emb = torch.matmul(trg, list(trg_embed.parameters())[0][:, trg_emb_shape:].T)
+        if self.encode_temporal_position ==False:
+            trg_tempo_emb = trg_emb
         else:
-            time_period = trg.shape[2]
-            tempo_embed = trg_embed1[1].pe[:,:,:time_period,:]
-            trg_emb_shape = int(list(trg_embed.parameters())[0].shape[-1]/2)
-            trg_embed_r1 = torch.matmul(trg, list(trg_embed.parameters())[0][:, trg_emb_shape:].T) + tempo_embed  # trg[:,:,:,:2]
-            a =  self.prediction_generator1(self.decoder1(self.spatial_position(trg_embed_r1), encoder_output))+encoder_input#[:,:,:,0:2]
-            # b = self.prediction_generator2(self.decoder1(self.spatial_position(trg_embed_r2), encoder_output))+encoder_input[:,:,:,0:3:2]
-            return a#torch.cat((a,b),axis=-1)
-            # return self.prediction_generator1(self.decoder1(self.spatial_position(trg_embed_r), encoder_output))+encoder_input
+            trg_tempo_emb = self.decode_temporal_position(trg_emb, t)
+
+        if self.spatial_position ==False:
+            a =  self.prediction_generator1(self.decoder1(trg_tempo_emb, encoder_output))+encoder_input#[:,:,:,0:2]
+            return a
+        else:
+            a =  self.prediction_generator1(self.decoder1(self.spatial_position(trg_tempo_emb,x,y), encoder_output))+encoder_input#[:,:,:,0:2]
+            return a
+
+
+
 
 class EncoderLayer(nn.Module):
     def __init__(self, size, self_attn, gcn, dropout, residual_connection=True, use_LayerNorm=True):
@@ -970,6 +856,24 @@ class Decoder(nn.Module):
             x = layer(x, memory)
         return self.norm(x)
 
+class EmbedLinear(nn.Module):
+    def __init__(self, encoder_input_size, d_model,bias=False):
+        '''
+        :param layer:  EncoderLayer
+        :param N:  int, number of EncoderLayers
+        '''
+        super(EmbedLinear, self).__init__()
+        self.layers = nn.Linear(encoder_input_size, d_model, bias=bias)
+
+    def forward(self, x):
+        '''
+        :param x: src: (batch_size, N, T_in, F_in)
+        :return: (batch_size, N, T_in, F_in)
+        '''
+        #for layer in self.layers:
+        y = self.layers(x)
+        return y
+
 def search_index(max_len, num_of_depend, num_for_predict,points_per_hour, units):
     '''
     Parameters
@@ -993,8 +897,8 @@ def search_index(max_len, num_of_depend, num_for_predict,points_per_hour, units)
 
 
 
-def make_model(DEVICE,logitudelatitudes, num_layers, encoder_input_size,decoder_input_size, decoder_output_size, d_model, adj_mx, nb_head, num_of_weeks,
-               num_of_days, num_of_hours, max_len, num_for_predict, dropout=.0, aware_temporal_context=True,
+def make_model(DEVICE,logitudelatitudes, num_layers, encoder_input_size,decoder_input_size, decoder_output_size, d_model, adj_mx, nb_head, num_of_lags,points_per_lag,
+                 num_for_predict, dropout=.0, aware_temporal_context=True,
                ScaledSAt=True, SE=True, TE=True, kernel_size=3, smooth_layer_num=0, residual_connection=True, use_LayerNorm=True):
 
     # LR rate means: graph Laplacian Regularization
@@ -1005,44 +909,29 @@ def make_model(DEVICE,logitudelatitudes, num_layers, encoder_input_size,decoder_
 
     num_of_vertices = norm_Adj_matrix.shape[0]
 
-    src_dense = nn.Linear(encoder_input_size, d_model, bias=False)
+    src_dense = EmbedLinear(encoder_input_size, d_model, bias=False)#nn.Linear(encoder_input_size, d_model, bias=False)
 
     if ScaledSAt:  # employ spatial self attention
         position_wise_gcn = PositionWiseGCNFeedForward(spatialAttentionScaledGCN(norm_Adj_matrix, d_model, d_model), dropout=dropout)
-    else:  # 不带attention
+    else:  #
         position_wise_gcn = PositionWiseGCNFeedForward(spatialGCN(norm_Adj_matrix, d_model, d_model), dropout=dropout)
 
     # encoder temporal position embedding
-    max_len = num_of_hours#max(num_of_weeks * 7 * 24 * num_for_predict, num_of_days * 24 * num_for_predict, num_of_hours * num_for_predict)
-
+    max_len = num_of_lags
 
     if aware_temporal_context:  # employ temporal trend-aware attention
-        attn_ss = MultiHeadAttentionAwareTemporalContex_q1d_k1d(nb_head, d_model, num_of_weeks, num_of_days, num_of_hours, num_for_predict, kernel_size, dropout=dropout)  # encoder的trend-aware attention用一维卷积
-        attn_st = MultiHeadAttentionAwareTemporalContex_qc_k1d(nb_head, d_model, num_of_weeks, num_of_days, num_of_hours, num_for_predict, kernel_size, dropout=dropout)
-        att_tt = MultiHeadAttentionAwareTemporalContex_qc_kc(nb_head, d_model, num_of_weeks, num_of_days, num_of_hours, num_for_predict, kernel_size, dropout=dropout)  # decoder的trend-aware attention用因果卷积
+        attn_ss = MultiHeadAttentionAwareTemporalContex_q1d_k1d(nb_head, d_model, num_of_lags, points_per_lag,  kernel_size, dropout=dropout)
+        attn_st = MultiHeadAttentionAwareTemporalContex_qc_k1d(nb_head, d_model,num_of_lags, points_per_lag,  kernel_size, dropout=dropout)
+        att_tt = MultiHeadAttentionAwareTemporalContex_qc_kc(nb_head, d_model, num_of_lags, points_per_lag,  kernel_size, dropout=dropout)
     else:  # employ traditional self attention
-        attn_ss = MultiHeadAttention(nb_head, d_model, dropout=dropout)
-        attn_st = MultiHeadAttention(nb_head, d_model, dropout=dropout)
-        att_tt = MultiHeadAttention(nb_head, d_model, dropout=dropout)
+        attn_ss = MultiHeadAttention(nb_head,d_model, dropout=dropout) #d_model, dropout=dropout)
+        attn_st = MultiHeadAttention(nb_head,d_model, dropout=dropout)# d_model, dropout=dropout)
+        att_tt = MultiHeadAttention(nb_head,d_model, dropout=dropout) #d_model, dropout=dropout)
 
-    if SE and TE:
-        encode_temporal_position = TemporalPositionalEncoding(d_model, dropout, max_len)  #   en_lookup_index   decoder temporal position embedding
-        decode_temporal_position = TemporalPositionalEncoding(d_model, dropout, num_for_predict)
-        spatial_position = SpatialPositionalEncoding_RBF(d_model, logitudelatitudes,num_of_vertices, dropout, GCN(norm_Adj_matrix, d_model, d_model), smooth_layer_num=smooth_layer_num) #logitudelatitudes,
-        encoder_embedding = nn.Sequential(src_dense, c(encode_temporal_position), c(spatial_position))
-        decoder_embedding = nn.Sequential(src_dense, c(decode_temporal_position), c(spatial_position)) #trg_dense
-    elif SE and (not TE):
-        spatial_position = SpatialPositionalEncoding_RBF(d_model,logitudelatitudes, num_of_vertices, dropout, GCN(norm_Adj_matrix, d_model, d_model), smooth_layer_num=smooth_layer_num) #logitudelatitudes,
-        encoder_embedding = nn.Sequential(src_dense, c(spatial_position))
-        decoder_embedding = nn.Sequential(src_dense, c(spatial_position))
-    elif (not SE) and (TE):
-        encode_temporal_position = TemporalPositionalEncoding(d_model, dropout, max_len)  #, en_lookup_index decoder temporal position embedding
-        decode_temporal_position = TemporalPositionalEncoding(d_model, dropout, num_for_predict)
-        encoder_embedding = nn.Sequential(src_dense, c(encode_temporal_position))
-        decoder_embedding = nn.Sequential(src_dense, c(decode_temporal_position))
-    else:
-        encoder_embedding = nn.Sequential(src_dense)
-        decoder_embedding = nn.Sequential(src_dense)
+    encode_temporal_position = TemporalPositionalEncoding(d_model, dropout, max_len)  #   en_lookup_index   decoder temporal position embedding
+    decode_temporal_position = TemporalPositionalEncoding(d_model, dropout, num_for_predict)
+    spatial_position = SpatialPositionalEncoding_RBF(d_model, logitudelatitudes,num_of_vertices, dropout, GCN(norm_Adj_matrix, d_model, d_model), smooth_layer_num=smooth_layer_num) #logitudelatitudes,
+
 
     encoderLayer = EncoderLayer(d_model, attn_ss, c(position_wise_gcn), dropout, residual_connection=residual_connection, use_LayerNorm=use_LayerNorm)
 
@@ -1051,25 +940,19 @@ def make_model(DEVICE,logitudelatitudes, num_layers, encoder_input_size,decoder_
     decoderLayer1 = DecoderLayer(d_model, att_tt, attn_st, c(position_wise_gcn), dropout, residual_connection=residual_connection, use_LayerNorm=use_LayerNorm)
 
     decoder1 = Decoder(decoderLayer1, num_layers)
+
     generator1 = nn.Linear(d_model, decoder_output_size)#
 
 
-    if SE :
-        model = EncoderDecoder(encoder,
-                           decoder1,
-                           encoder_embedding,
-                           decoder_embedding,
-                           generator1,
-                           DEVICE,
-                           spatial_position) #,generator2
-    else:
-        model = EncoderDecoder(encoder,
-                               decoder1,
-                               encoder_embedding,
-                               decoder_embedding,
-                               generator1,
-                               DEVICE,
-                               spatial_position=False) #generator2,
+
+    model = EncoderDecoder(encoder,decoder_output_size,
+                       decoder1,
+                           src_dense,
+                       encode_temporal_position,
+                       decode_temporal_position,
+                       generator1,
+                       DEVICE,
+                       spatial_position) #,generator2
 
     # param init
     for p in model.parameters():
